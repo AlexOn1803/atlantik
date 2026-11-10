@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- хвилі тепла -->
+    <path android:strokeColor="#FFE3D3" android:strokeWidth="3.5" android:strokeLineCap="round"
+        android:pathData="M42,44 c-3,-3 3,-6 0,-9 c-3,-3 3,-6 0,-9" />
+    <path android:strokeColor="#FFE3D3" android:strokeWidth="3.5" android:strokeLineCap="round"
+        android:pathData="M54,44 c-3,-3 3,-6 0,-9 c-3,-3 3,-6 0,-9" />
+    <path android:strokeColor="#FFE3D3" android:strokeWidth="3.5" android:strokeLineCap="round"
+        android:pathData="M66,44 c-3,-3 3,-6 0,-9 c-3,-3 3,-6 0,-9" />
+    <!-- корпус конвектора -->
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M32,50 h44 a4,4 0 0 1 4,4 v20 a4,4 0 0 1 -4,4 h-44 a4,4 0 0 1 -4,-4 v-20 a4,4 0 0 1 4,-4 z" />
+    <path android:fillColor="#C4501E"
+        android:pathData="M36,55 h36 v3 h-36 z M36,62 h36 v3 h-36 z M36,69 h24 v3 h-24 z" />
+    <path android:fillColor="#C4501E" android:pathData="M66,70.5 m-2.5,0 a2.5,2.5 0 1 0 5,0 a2.5,2.5 0 1 0 -5,0" />
+    <!-- ніжки -->
+    <path android:fillColor="#FFFFFF" android:pathData="M36,78 h5 v4 h-5 z M67,78 h5 v4 h-5 z" />
+</vector>
