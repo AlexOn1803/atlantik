@@ -2,8 +2,9 @@ package ua.madeisy.atlantic.core
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
-import com.sun.net.httpserver.HttpServer
-import java.net.InetSocketAddress
+import java.net.InetAddress
+import java.net.ServerSocket
+import kotlin.concurrent.thread
 
 class CoreTest {
     private var failures = 0
@@ -28,43 +29,58 @@ class CoreTest {
     var polls = 0
     var tokenCalls = 0
     var setupPut: String? = null
-    val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-    fun reply(ex: com.sun.net.httpserver.HttpExchange, code: Int, body: String) {
-        val b = body.toByteArray(); ex.sendResponseHeaders(code, if (b.isEmpty()) -1 else b.size.toLong())
-        if (b.isNotEmpty()) ex.responseBody.use { it.write(b) } else ex.close()
-    }
-    server.createContext("/") { ex ->
-        val path = ex.requestURI.toString()
-        val body = ex.requestBody.readBytes().toString(Charsets.UTF_8)
-        val auth = ex.requestHeaders.getFirst("Authorization") ?: ""
-        when {
+    class Req(val path: String, val body: String, val auth: String)
+    val server = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
+    fun handle(r: Req): Pair<Int, String> {
+        val path = r.path; val body = r.body; val auth = r.auth
+        return when {
             path == "/users/token" -> {
                 tokenCalls++
                 check(auth == "Basic ${CozyApi.CLIENT_BASIC}", "token uses basic client")
                 check(body.contains("username=GA-PRIVATEPERSON%2Fme%40mail.com"), "token username prefix")
-                if (body.contains("password=bad")) reply(ex, 400, """{"error":"invalid_grant"}""")
-                else reply(ex, 200, """{"access_token":"T$tokenCalls","token_type":"Bearer","expires_in":3600}""")
+                if (body.contains("password=bad")) 400 to """{"error":"invalid_grant"}"""
+                else 200 to """{"access_token":"T$tokenCalls","token_type":"Bearer","expires_in":3600}"""
             }
-            !auth.startsWith("Bearer ") -> reply(ex, 401, "")
-            path == "/magellan/cozytouch/setupviewv2" -> reply(ex, 200, """[{"id":"abc-1","name":"Дім","zones":[{"id":"z1","name":"Спальня"}],
-                "devices":[{"deviceId":555,"modelId":2401,"productId":41,"name":"ALTIS","zoneId":"z1",
-                "capabilities":[{"capabilityId":7,"value":"4"},{"capabilityId":40,"value":"21.0"},{"capabilityId":117,"value":"19.5"},
-                {"capabilityId":160,"value":"7"},{"capabilityId":161,"value":"28"},{"capabilityId":184,"value":"1"},{"capabilityId":157,"value":"0"},
-                {"capabilityId":158,"value":"120"},{"capabilityId":153,"value":"1"},{"capabilityId":104044,"value":"0"},{"capabilityId":222,"value":"[0,0]"},{"capabilityId":152,"value":"0"},
-                {"capabilityId":196,"value":"[[0,17],[420,21]]"},{"capabilityId":197,"value":"[[0,17]]"},{"capabilityId":198,"value":"[[0,17]]"},
-                {"capabilityId":199,"value":"[[0,17]]"},{"capabilityId":200,"value":"[[0,17]]"},{"capabilityId":201,"value":"[[0,17]]"},{"capabilityId":202,"value":"[[0,17]]"},
-                {"capabilityId":99999,"value":"x"}]}]}]""")
-            path.startsWith("/magellan/capabilities/?deviceId=555") -> reply(ex, 200, """[{"capabilityId":"117","value":"20.0"},{"capabilityId":40,"value":22}]""")
-            path == "/magellan/executions/writecapability" -> { writes += body; reply(ex, 201, "\"exec-${writes.size}\"") }
-            path.startsWith("/magellan/executions/exec-") -> { polls++; reply(ex, 200, if (polls % 2 == 1) """{"state":2}""" else """{"state":3}""") }
-            path == "/magellan/v2/setups/abc-1" -> { setupPut = body; reply(ex, 204, "") }
-            path.startsWith("/magellan/setups/abc-1/consumptions") -> reply(ex, 200,
-                """[{"consumptionPeriods":[{"consumedQuantity":4,"cost":0.5,"date":100},{"consumedQuantity":1.5,"date":200}]},{"consumptionPeriods":[{"consumedQuantity":1,"date":100}]}]""")
-            else -> reply(ex, 404, "nope $path")
+            !auth.startsWith("Bearer ") -> 401 to ""
+            path == "/magellan/cozytouch/setupviewv2" -> 200 to SETUP
+            path.startsWith("/magellan/capabilities/?deviceId=555") -> 200 to """[{"capabilityId":"117","value":"20.0"},{"capabilityId":40,"value":22}]"""
+            path == "/magellan/executions/writecapability" -> { writes += body; 201 to "\"exec-${writes.size}\"" }
+            path.startsWith("/magellan/executions/exec-") -> { polls++; 200 to (if (polls % 2 == 1) """{"state":2}""" else """{"state":3}""") }
+            path == "/magellan/v2/setups/abc-1" -> { setupPut = body; 204 to "" }
+            path.startsWith("/magellan/setups/abc-1/consumptions") -> 200 to
+                """[{"consumptionPeriods":[{"consumedQuantity":4,"cost":0.5,"date":100},{"consumedQuantity":1.5,"date":200}]},{"consumptionPeriods":[{"consumedQuantity":1,"date":100}]}]"""
+            else -> 404 to "nope $path"
         }
     }
-    server.start()
-    val api = CozyApi(baseUrl = "http://127.0.0.1:${server.address.port}", sleeper = {})
+    thread(isDaemon = true) {
+        while (!server.isClosed) {
+            val sock = runCatching { server.accept() }.getOrNull() ?: break
+            sock.use { so ->
+                val inp = so.getInputStream()
+                val headerBytes = java.io.ByteArrayOutputStream()
+                var last4 = 0
+                while (true) {
+                    val b = inp.read(); if (b < 0) break
+                    headerBytes.write(b)
+                    last4 = (last4 shl 8) or b
+                    if (last4 == 0x0D0A0D0A) break
+                }
+                val lines = headerBytes.toString("UTF-8").split("\r\n")
+                val path = lines[0].split(" ")[1]
+                val headers = lines.drop(1).filter { it.contains(':') }
+                    .associate { it.substringBefore(':').trim().lowercase() to it.substringAfter(':').trim() }
+                val len = headers["content-length"]?.toIntOrNull() ?: 0
+                val bodyBytes = ByteArray(len); var read = 0
+                while (read < len) { val n = inp.read(bodyBytes, read, len - read); if (n < 0) break; read += n }
+                val (code, resp) = handle(Req(path, String(bodyBytes, Charsets.UTF_8), headers["authorization"] ?: ""))
+                val rb = resp.toByteArray(Charsets.UTF_8)
+                val out = so.getOutputStream()
+                out.write("HTTP/1.1 $code X\r\nContent-Type: application/json\r\nContent-Length: ${rb.size}\r\nConnection: close\r\n\r\n".toByteArray())
+                out.write(rb); out.flush()
+            }
+        }
+    }
+    val api = CozyApi(baseUrl = "http://127.0.0.1:${server.localPort}", sleeper = {})
 
     check(runCatching { api.login("me@mail.com", "bad") }.exceptionOrNull()?.message?.contains("Невірний") == true, "bad password message")
     api.login("me@mail.com", "good")
@@ -100,7 +116,16 @@ class CoreTest {
     check(Catalog.format(99999, "x") == "x" && !Catalog.isKnown(99999), "unknown capability raw")
     print(h.dump().lines().take(3).joinToString("\n")); println()
 
-    server.stop(0)
+    server.close()
     assertEquals("невдалих перевірок", 0, failures)
     }
 }
+
+private const val SETUP = """[{"id":"abc-1","name":"Дім","zones":[{"id":"z1","name":"Спальня"}],
+                "devices":[{"deviceId":555,"modelId":2401,"productId":41,"name":"ALTIS","zoneId":"z1",
+                "capabilities":[{"capabilityId":7,"value":"4"},{"capabilityId":40,"value":"21.0"},{"capabilityId":117,"value":"19.5"},
+                {"capabilityId":160,"value":"7"},{"capabilityId":161,"value":"28"},{"capabilityId":184,"value":"1"},{"capabilityId":157,"value":"0"},
+                {"capabilityId":158,"value":"120"},{"capabilityId":153,"value":"1"},{"capabilityId":104044,"value":"0"},{"capabilityId":222,"value":"[0,0]"},{"capabilityId":152,"value":"0"},
+                {"capabilityId":196,"value":"[[0,17],[420,21]]"},{"capabilityId":197,"value":"[[0,17]]"},{"capabilityId":198,"value":"[[0,17]]"},
+                {"capabilityId":199,"value":"[[0,17]]"},{"capabilityId":200,"value":"[[0,17]]"},{"capabilityId":201,"value":"[[0,17]]"},{"capabilityId":202,"value":"[[0,17]]"},
+                {"capabilityId":99999,"value":"x"}]}]}]"""
