@@ -255,6 +255,18 @@ class CozyApi(
         runCatching { authed("POST", "/magellan/zones/autoconfigure", Json.stringify(mapOf("gatewayId" to gatewayId))) }
     }
 
+    /** Чи синхронізувався шлюз з хмарою (null — хмара не відповіла). */
+    fun isGatewaySynchronized(serial: String): Boolean? {
+        val res = authed("GET", "/magellan/gateways/issynchronized?serialNumber=" + URLEncoder.encode(serial, "UTF-8"))
+        if (res.code !in 200..299) return null
+        val j = res.json()
+        return when (j) {
+            is Boolean -> j
+            is Map<*, *> -> j.asMap()["isSynchronized"] as? Boolean
+            else -> null
+        }
+    }
+
     private fun waitExecution(id: String, maxPolls: Int, intervalMs: Long) {
         repeat(maxPolls) {
             sleeper(intervalMs)

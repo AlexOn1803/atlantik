@@ -9,7 +9,7 @@ import java.net.URL
 import kotlin.concurrent.thread
 
 /** Мінімальний HTTP-сервер для тестів (без com.sun.*, щоб працювало і під Android unit tests). */
-private class FakeHttp(val handler: (method: String, path: String, body: String) -> Triple<Int, String, Map<String, String>>) {
+internal class FakeHttp(val handler: (method: String, path: String, body: String) -> Triple<Int, String, Map<String, String>>) {
     val server = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
     val port get() = server.localPort
 
@@ -103,9 +103,9 @@ class PairingTest {
         var connectedTo: Pair<String, String>? = null
         var disconnected = false
         val connector = object : ApConnector {
-            override fun connect(ssid: String, password: String, timeoutMs: Long): (URL) -> HttpURLConnection {
-                connectedTo = ssid to password
-                return { url -> URL("http://127.0.0.1:${device.port}${url.path}").openConnection() as HttpURLConnection }
+            override fun connect(target: ApTarget, timeoutMs: Long): ApLink {
+                connectedTo = target.ssid!! to target.password!!
+                return ApLink({ url -> URL("http://127.0.0.1:${device.port}${url.path}").openConnection() as HttpURLConnection }, javax.net.SocketFactory.getDefault())
             }
             override fun disconnect() { disconnected = true }
         }

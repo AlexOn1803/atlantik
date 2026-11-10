@@ -36,6 +36,7 @@ data class PairUi(
     val success: Boolean = false,
     val newDeviceId: Long? = null,
     val log: List<String> = emptyList(),
+    val order: List<PairStep> = PairStep.values().toList(),
 )
 
 data class UiState(
@@ -258,35 +259,42 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(addingHeater = false, pair = PairUi()) }
     }
 
-    /** code — PIN-id (12 цифр) або текст QR-коду з панелі обігрівача. */
-    fun startPairing(code: String, homeSsid: String, homePassword: String) {
-        val ap = PairingCodes.fromQr(code) ?: runCatching { PairingCodes.fromPin(code) }.getOrElse { e ->
-            _state.update { it.copy(pair = PairUi(error = e.message)) }; return
-        }
+    /**
+     * bd1 = true — модуль з мережею ELEC_HEATER_Wifi_xxxx (CHG-BD1/Wi‑Fi): PIN прилад віддає сам, code необов'язковий.
+     * bd1 = false — мережа GA-xxxxxxxxxxxx: code — PIN-id або текст QR-коду.
+     */
+    fun startPairing(bd1: Boolean, code: String, homeSsid: String, homePassword: String) {
         if (homeSsid.isBlank()) {
             _state.update { it.copy(pair = PairUi(error = "Вкажіть назву домашньої Wi‑Fi мережі (2.4 ГГц)")) }
             return
         }
-        _state.update { it.copy(pair = PairUi(running = true)) }
+        val ap = if (bd1) null else PairingCodes.fromQr(code) ?: runCatching { PairingCodes.fromPin(code) }.getOrElse { e ->
+            _state.update { it.copy(pair = PairUi(error = e.message)) }; return
+        }
+        val order = if (bd1) listOf(PairStep.AP_CONNECT, PairStep.SEND_WIFI, PairStep.WAIT_CLOUD, PairStep.CLOUD_REGISTER, PairStep.CLOUD_ATTACH, PairStep.DISCOVER)
+        else PairStep.values().toList()
+        _state.update { it.copy(pair = PairUi(running = true, order = order)) }
         fun addLog(line: String) {
             android.util.Log.d("CozyPair", line)
-            _state.update { st -> st.copy(pair = st.pair.copy(log = (st.pair.log + line).takeLast(200))) }
+            _state.update { st -> st.copy(pair = st.pair.copy(log = (st.pair.log + line).takeLast(300))) }
         }
         viewModelScope.launch {
             try {
                 val id = withContext(Dispatchers.IO) {
-                    Pairer(
+                    val pairer = Pairer(
                         api = api,
                         connector = WifiApConnector(getApplication<android.app.Application>()),
                         onStep = { step ->
                             _state.update { st ->
                                 val prev = st.pair.step
-                                st.copy(pair = st.pair.copy(step = step, done = if (prev != null) st.pair.done + prev else st.pair.done))
+                                st.copy(pair = st.pair.copy(step = step, done = if (prev != null && prev != step) st.pair.done + prev else st.pair.done))
                             }
                             addLog("▶ ${step.title}")
                         },
                         log = { addLog(it) },
-                    ).run(ap, homeSsid, homePassword)
+                    )
+                    if (bd1) pairer.runBd1(homeSsid, homePassword, knownPin = code.takeIf { it.isNotBlank() })
+                    else pairer.run(ap!!, homeSsid, homePassword)
                 }
                 _state.update { st ->
                     st.copy(pair = st.pair.copy(running = false, success = true, newDeviceId = id, done = PairStep.values().toSet(), step = null))

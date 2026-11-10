@@ -15,6 +15,14 @@ Android-застосунок для керування конвектором **
 
 ## Додавання обігрівача (без Cozytouch)
 
+### CHG-BD1/Wi‑Fi (мережа `ELEC_HEATER_Wifi_xxxx`) — як у ALTIS ECO BOOST
+
+1. Телефон підключається до точки доступу обігрівача (відкрита або пароль `WIFIHVAC`).
+2. WebSocket `ws://192.168.1.99:9998`, Modbus-JSON: читання PIN-id (holding 180×6), запис Wi‑Fi — 134←3, 98←пароль (64 б), 82←SSID (32 б).
+3. Хмара: знайти/створити шлюз за PIN, дочекатися `gateways/issynchronized`, прив'язати до будинку, дочекатися приладу.
+
+### BD0 Wi‑Fi (мережа `GA-xxxxxxxxxxxx`)
+
 Кнопка «Додати обігрівач» повторює те, що робить офіційний застосунок для BD0/BD1 Wi‑Fi:
 
 1. **Хмара:** шукає прилад за серійним номером (`HEAD /magellan/gateways/?serialNumber=XXXX-XXXX-XXXX`), за потреби реєструє (`POST /gateways`) і прив'язує до вашого будинку (`POST /executions/setups/{id}/attach-gateway`).

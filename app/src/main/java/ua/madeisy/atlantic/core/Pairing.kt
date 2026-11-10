@@ -124,10 +124,15 @@ class LocalHeaterApi(
     }
 }
 
+/** Яку мережу шукати: точну назву або префікс; password = null — відкрита мережа. */
+data class ApTarget(val ssid: String? = null, val ssidPrefix: String? = null, val password: String? = null)
+
+/** Канал через Wi‑Fi приладу: HTTP-з'єднання і сокети. */
+class ApLink(val open: (URL) -> HttpURLConnection, val socketFactory: javax.net.SocketFactory)
+
 /** Підключення телефону до точки доступу приладу (реалізація — на Android). */
 interface ApConnector {
-    /** Підключитися і повернути спосіб відкривати HTTP-з'єднання через цю мережу. */
-    fun connect(ssid: String, password: String, timeoutMs: Long): (URL) -> HttpURLConnection
+    fun connect(target: ApTarget, timeoutMs: Long): ApLink
     fun disconnect()
 }
 
@@ -171,8 +176,8 @@ class Pairer(
 
         // 3. Точка доступу приладу
         onStep(PairStep.AP_CONNECT)
-        val opener = try {
-            connector.connect(ap.ssid, ap.password, 60_000)
+        val link = try {
+            connector.connect(ApTarget(ssid = ap.ssid, password = ap.password), 60_000)
         } catch (e: Exception) {
             throw CozyException(
                 "Не вдалося підключитися до мережі ${ap.ssid}. Перевірте, що індикатор Wi‑Fi на обігрівачі " +
@@ -180,7 +185,7 @@ class Pairer(
             )
         }
         try {
-            val local = LocalHeaterApi(opener, log = log)
+            val local = LocalHeaterApi(link.open, log = log)
             runCatching { log("info: ${local.info()}") }
             runCatching { local.removeCredential() }
 
@@ -212,6 +217,10 @@ class Pairer(
         // 5. Хмара: дочекатися приладу
         onStep(PairStep.DISCOVER)
         sleeper(8000) // телефон повертається в інтернет
+        return waitForDevice(gatewayId, ap.serial, knownBefore)
+    }
+
+    private fun waitForDevice(gatewayId: Int, serial: String, knownBefore: Set<Long>): Long {
         api.requestDiscover(gatewayId)
         val deadline = clock() + 180_000
         var autoConfigured = false
@@ -222,7 +231,7 @@ class Pairer(
             if ((status == 2 || status == 3) && !autoConfigured) { api.autoConfigureZones(gatewayId); autoConfigured = true }
             val devices = runCatching { api.getSetups().flatMap { it.devices } }.getOrElse { emptyList() }
             val mine = devices.firstOrNull { d ->
-                d.deviceId !in knownBefore && (d.raw["gatewaySerialNumber"].asStringOrNull()?.filter { it.isDigit() } == ap.serial.filter { it.isDigit() } || d.looksLikeHeater)
+                d.deviceId !in knownBefore && (d.raw["gatewaySerialNumber"].asStringOrNull()?.filter { it.isDigit() } == serial.filter { it.isDigit() } || d.looksLikeHeater)
             }
             if (mine != null) return mine.deviceId
             sleeper(6000)
@@ -231,6 +240,76 @@ class Pairer(
         throw CozyException(
             "Обігрівач отримав Wi‑Fi, але в акаунті ще не з'явився. Зачекайте кілька хвилин і оновіть список. " +
                 "Якщо індикатор Wi‑Fi на приладі світиться постійно — він уже в мережі.",
+        )
+    }
+
+    /**
+     * Сценарій CHG-BD1/Wi‑Fi (мережа ELEC_HEATER_Wifi_xxxx), як у Cozytouch:
+     * точка доступу → прочитати PIN з приладу → передати Wi‑Fi → у хмарі знайти/створити шлюз,
+     * дочекатися синхронізації, прив'язати до будинку → дочекатися приладу.
+     * [knownPin] — якщо прилад не віддав PIN сам.
+     */
+    fun runBd1(homeSsid: String, homePassword: String, knownPin: String? = null, apSuffix: String? = null): Long? {
+        require(homeSsid.isNotBlank()) { "Вкажіть назву домашньої Wi‑Fi мережі" }
+        val setupId = api.getSetupIds().firstOrNull()
+            ?: throw CozyException("В акаунті немає жодного «будинку». Створіть його один раз в офіційному Cozytouch і повторіть.")
+        val knownBefore = runCatching { api.getSetups().flatMap { it.devices }.map { it.deviceId }.toSet() }.getOrElse { emptySet() }
+
+        onStep(PairStep.AP_CONNECT)
+        val ssidExact = apSuffix?.trim()?.takeIf { it.isNotEmpty() }?.let { Bd1Protocol.AP_PREFIX + it }
+        val link = connectBd1Ap(ssidExact)
+        var pin: String? = null
+        try {
+            val local = Bd1Local(link.socketFactory, log)
+            pin = local.readPin() ?: knownPin?.filter { it.isDigit() }?.takeIf { it.length == 12 }
+            log("PIN приладу: ${pin ?: "не прочитано"}")
+            if (pin == null) throw CozyException(
+                "Обігрівач не повідомив свій PIN-id. Введіть його вручну (12 цифр з меню приладу) і повторіть.",
+            )
+            onStep(PairStep.SEND_WIFI)
+            val confirmed = local.sendWifi(homeSsid.trim(), homePassword)
+            log(if (confirmed) "Модуль підтвердив Wi‑Fi" else "Модуль не відповів — ймовірно, вже перемикається")
+        } finally {
+            connector.disconnect()
+        }
+
+        val serial = PairingCodes.formatSerial(pin!!)
+        onStep(PairStep.WAIT_CLOUD)
+        sleeper(10_000) // прилад підключається до роутера, телефон — назад в інтернет
+        var gatewayId: Int? = null
+        val until = clock() + 240_000
+        while (clock() < until) {
+            gatewayId = runCatching { api.findGatewayId(serial) }.getOrElse { e -> if (e is CozyException && e.httpCode in listOf(403, 451)) throw e; null }
+                ?: runCatching { api.createGateway(serial) }.getOrNull()
+            if (gatewayId != null) {
+                val sync = runCatching { api.isGatewaySynchronized(serial) }.getOrNull()
+                log("gatewayId=$gatewayId synchronized=$sync")
+                if (sync != false) break
+            }
+            sleeper(10_000)
+        }
+        val gid = gatewayId ?: throw CozyException("Хмара не бачить обігрівач. Перевірте пароль Wi‑Fi і що мережа 2.4 ГГц, та повторіть.")
+
+        onStep(PairStep.CLOUD_REGISTER)
+        onStep(PairStep.CLOUD_ATTACH)
+        api.attachGateway(setupId, gid)
+
+        onStep(PairStep.DISCOVER)
+        return waitForDevice(gid, serial, knownBefore)
+    }
+
+    private fun connectBd1Ap(exact: String?): ApLink {
+        val targets = listOf(
+            ApTarget(ssid = exact, ssidPrefix = if (exact == null) Bd1Protocol.AP_PREFIX else null, password = null),
+            ApTarget(ssid = exact, ssidPrefix = if (exact == null) Bd1Protocol.AP_PREFIX else null, password = Bd1Protocol.AP_PASSWORD),
+        )
+        var last: Exception? = null
+        for (t in targets) {
+            try { return connector.connect(t, 60_000) } catch (e: Exception) { last = e; log("AP ${t.password ?: "(відкрита)"}: ${e.message}") }
+        }
+        throw CozyException(
+            "Не вдалося підключитися до мережі ${exact ?: Bd1Protocol.AP_PREFIX + "…"}. Переконайтесь, що вона є у списку Wi‑Fi " +
+                "і телефон поруч з обігрівачем. (${last?.message})", cause = last,
         )
     }
 }

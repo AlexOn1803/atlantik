@@ -62,6 +62,7 @@ fun AddHeaterScreen(st: UiState, vm: AppViewModel) {
     val p = st.pair
     // поля форми живуть тут, щоб «Спробувати ще» не стирало введене
     val code = rememberSaveable { mutableStateOf("") }
+    val bd1 = rememberSaveable { mutableStateOf(true) }
     val ssid = rememberSaveable { mutableStateOf("") }
     val password = rememberSaveable { mutableStateOf("") }
     BackHandler(enabled = !p.running) { vm.closeAddHeater() }
@@ -83,7 +84,7 @@ fun AddHeaterScreen(st: UiState, vm: AppViewModel) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (p.running || p.success || p.step != null) Progress(p, vm)
-            else Form(st, vm, code, ssid, password)
+            else Form(st, vm, bd1, code, ssid, password)
         }
     }
 }
@@ -92,11 +93,13 @@ fun AddHeaterScreen(st: UiState, vm: AppViewModel) {
 private fun Form(
     st: UiState,
     vm: AppViewModel,
+    bd1State: androidx.compose.runtime.MutableState<Boolean>,
     codeState: androidx.compose.runtime.MutableState<String>,
     ssidState: androidx.compose.runtime.MutableState<String>,
     passwordState: androidx.compose.runtime.MutableState<String>,
 ) {
     val ctx = LocalContext.current
+    var bd1 by bd1State
     var code by codeState
     var ssid by ssidState
     var password by passwordState
@@ -105,16 +108,16 @@ private fun Form(
     val needed = if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
     else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
-        if (res.values.all { it }) vm.startPairing(code, ssid, password)
-        else vm.startPairing(code, ssid, password) // спробуємо й так — на багатьох телефонах діалог Wi‑Fi працює без дозволу
+        if (res.values.all { it }) vm.startPairing(bd1, code, ssid, password)
+        else vm.startPairing(bd1, code, ssid, password) // спробуємо й так — на багатьох телефонах діалог Wi‑Fi працює без дозволу
     }
 
     Card {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("1. Підготуйте обігрівач", style = MaterialTheme.typography.titleSmall)
+            Text("1. Увімкніть на обігрівачі режим підключення", style = MaterialTheme.typography.titleSmall)
             Text(
-                "Увімкніть його і затисніть кнопку вибору режиму (OK) приблизно на 5 секунд, " +
-                    "доки індикатор Wi‑Fi не почне повільно блимати. Тримайте телефон поруч.",
+                "Затисніть кнопку вибору режиму (OK) приблизно на 5 секунд, доки індикатор Wi‑Fi не почне " +
+                    "повільно блимати. Тримайте телефон поруч.",
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
@@ -122,23 +125,33 @@ private fun Form(
 
     Card {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("2. PIN-id обігрівача", style = MaterialTheme.typography.titleSmall)
-            Text(
-                "12 цифр вигляду 1234-5678-9012. Є на наклейці збоку приладу, а також у меню: " +
-                    "натисніть кнопку один раз на увімкненому обігрівачі. Можна вставити і текст з QR-коду.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Text("2. Яка мережа з'явилася у списку Wi‑Fi?", style = MaterialTheme.typography.titleSmall)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.material3.RadioButton(selected = bd1, onClick = { bd1 = true })
+                Column(Modifier.weight(1f)) {
+                    Text("ELEC_HEATER_Wifi_xxxx", fontFamily = FontFamily.Monospace)
+                    Text("CHG-BD1/Wi‑Fi (ALTIS). PIN не потрібен — прилад повідомить його сам.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.material3.RadioButton(selected = !bd1, onClick = { bd1 = false })
+                Column(Modifier.weight(1f)) {
+                    Text("GA-xxxxxxxxxxxx", fontFamily = FontFamily.Monospace)
+                    Text("BD0 Wi‑Fi. Потрібен PIN-id — це 12 цифр із назви мережі.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
             OutlinedTextField(
                 value = code, onValueChange = { code = it.take(200) },
-                label = { Text("PIN-id") }, singleLine = true,
+                label = { Text(if (bd1) "PIN-id (необов'язково)" else "PIN-id або текст QR") }, singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth(),
             )
-            val ap = PairingCodes.fromQr(code) ?: runCatching { PairingCodes.fromPin(code) }.getOrNull()
-            if (ap != null) Text(
-                "Мережа обігрівача: ${ap.ssid}",
-                style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace,
-            )
+            if (!bd1) {
+                val ap = PairingCodes.fromQr(code) ?: runCatching { PairingCodes.fromPin(code) }.getOrNull()
+                if (ap != null) Text("Мережа обігрівача: ${ap.ssid}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+            }
         }
     }
 
@@ -168,13 +181,13 @@ private fun Form(
     Button(
         onClick = {
             val missing = needed.filter { ContextCompat.checkSelfPermission(ctx, it) != PackageManager.PERMISSION_GRANTED }
-            if (missing.isEmpty()) vm.startPairing(code, ssid, password) else launcher.launch(missing.toTypedArray())
+            if (missing.isEmpty()) vm.startPairing(bd1, code, ssid, password) else launcher.launch(missing.toTypedArray())
         },
         modifier = Modifier.fillMaxWidth().height(52.dp),
     ) { Text("Підключити обігрівач") }
 
     Text(
-        "Під час підключення Android запитає дозвіл підключитися до мережі «GA-…» — натисніть «Підключити». " +
+        "Під час підключення Android покаже мережу обігрівача і запитає дозвіл — оберіть її і натисніть «Підключити». " +
             "Телефон на хвилину втратить інтернет через Wi‑Fi, це нормально.",
         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -185,7 +198,7 @@ private fun Progress(p: PairUi, vm: AppViewModel) {
     var showLog by remember { mutableStateOf(false) }
     Card {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            for (s in PairStep.values()) {
+            for (s in p.order) {
                 val state = when {
                     s in p.done -> 2
                     s == p.step && p.error != null -> 3

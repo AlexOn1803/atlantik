@@ -10,7 +10,10 @@ import android.net.wifi.WifiConfiguration
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
 import android.os.Build
+import android.os.PatternMatcher
 import ua.madeisy.atlantic.core.ApConnector
+import ua.madeisy.atlantic.core.ApLink
+import ua.madeisy.atlantic.core.ApTarget
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -28,18 +31,22 @@ class WifiApConnector(context: Context) : ApConnector {
     private var callback: ConnectivityManager.NetworkCallback? = null
     private var legacyNetId: Int = -1
 
-    override fun connect(ssid: String, password: String, timeoutMs: Long): (URL) -> HttpURLConnection {
+    override fun connect(target: ApTarget, timeoutMs: Long): ApLink {
         disconnect()
-        val network = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) connectQ(ssid, password, timeoutMs)
-        else connectLegacy(ssid, password, timeoutMs)
-        return { url -> network.openConnection(url) as HttpURLConnection }
+        val network = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) connectQ(target, timeoutMs)
+        else connectLegacy(target, timeoutMs)
+        return ApLink({ url -> network.openConnection(url) as HttpURLConnection }, network.socketFactory)
     }
 
-    private fun connectQ(ssid: String, password: String, timeoutMs: Long): Network {
-        val spec = WifiNetworkSpecifier.Builder()
-            .setSsid(ssid)
-            .setWpa2Passphrase(password)
-            .build()
+    private fun connectQ(target: ApTarget, timeoutMs: Long): Network {
+        val b = WifiNetworkSpecifier.Builder()
+        when {
+            target.ssid != null -> b.setSsid(target.ssid)
+            target.ssidPrefix != null -> b.setSsidPattern(PatternMatcher(target.ssidPrefix, PatternMatcher.PATTERN_PREFIX))
+            else -> throw IOException("не вказано мережу")
+        }
+        target.password?.let { b.setWpa2Passphrase(it) }
+        val spec = b.build()
         val request = NetworkRequest.Builder()
             .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
             .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -65,11 +72,16 @@ class WifiApConnector(context: Context) : ApConnector {
 
     @Suppress("DEPRECATION")
     @SuppressLint("MissingPermission")
-    private fun connectLegacy(ssid: String, password: String, timeoutMs: Long): Network {
+    private fun connectLegacy(target: ApTarget, timeoutMs: Long): Network {
         val wm = app.getSystemService(WifiManager::class.java)
+        val ssid = target.ssid ?: target.ssidPrefix?.let { prefix ->
+            wm.scanResults.map { it.SSID }.firstOrNull { it.startsWith(prefix) }
+        } ?: throw IOException("мережу ${target.ssidPrefix}… не знайдено поруч")
         val conf = WifiConfiguration().apply {
             SSID = "\"" + ssid + "\""
-            preSharedKey = "\"" + password + "\""
+            val pass = target.password
+            if (pass == null) allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE)
+            else preSharedKey = "\"" + pass + "\""
         }
         legacyNetId = wm.addNetwork(conf)
         if (legacyNetId == -1) throw IOException("не вдалося додати мережу $ssid")
