@@ -95,6 +95,7 @@ fun HeaterScreen(st: UiState, vm: AppViewModel) {
                     }
                 },
                 actions = {
+                    IconButton(onClick = { vm.openAddHeater() }) { Icon(Icons.Default.Add, "Додати обігрівач") }
                     if (st.refreshing) CircularProgressIndicator(Modifier.size(22.dp).padding(end = 4.dp), strokeWidth = 2.dp)
                     else IconButton(onClick = { vm.refreshSelected() }) { Icon(Icons.Default.Refresh, "Оновити") }
                 },

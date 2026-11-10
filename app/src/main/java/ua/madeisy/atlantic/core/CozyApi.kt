@@ -175,9 +175,102 @@ class CozyApi(
         res.requireOk("режим відсутності")
     }
 
+    // ───────────────────────── Додавання приладу (як у Cozytouch) ─────────────────────────
+
+    /** id будинків (setups) акаунта. Прилад прив'язується до першого, як в офіційному застосунку. */
+    fun getSetupIds(): List<Int> {
+        val res = authed("GET", "/magellan/setups")
+        res.requireOk("список будинків")
+        return res.json().asList().mapNotNull { it.asMap()["id"].asLongOrNull()?.toInt() }
+    }
+
+    /**
+     * id шлюзу (сам Wi-Fi обігрівач — це «шлюз») за серійним номером XXXX-XXXX-XXXX,
+     * або null, якщо хмара ще його не знає. id повертається в заголовку Location.
+     */
+    fun findGatewayId(serial: String): Int? {
+        val res = authed("HEAD", "/magellan/gateways/?serialNumber=" + URLEncoder.encode(serial, "UTF-8"))
+        res.location?.substringAfterLast('/')?.trim()?.toIntOrNull()?.let { return it }
+        return when (res.code) {
+            404 -> null
+            403 -> throw CozyException(
+                "Цей обігрівач уже прив'язаний до іншого акаунта Cozytouch. Його має відв'язати попередній " +
+                    "власник (у своєму застосунку) або підтримка Atlantic (0 800 50-08-85), назвавши PIN-id приладу.", 403,
+            )
+            451 -> throw CozyException("На приладі діє сервісний контракт — прив'язка можлива лише через підтримку Atlantic.", 451)
+            in 200..299 -> null
+            else -> { res.requireOk("пошук приладу"); null }
+        }
+    }
+
+    fun createGateway(serial: String): Int {
+        val res = authed("POST", "/magellan/gateways", Json.stringify(mapOf("serialNumber" to serial)))
+        if (res.code == 403) throw CozyException("Хмара не дозволила зареєструвати прилад (HTTP 403). Можливо, він належить іншому акаунту.", 403)
+        res.requireOk("реєстрація приладу")
+        return res.json().asLongOrNull()?.toInt()
+            ?: res.location?.substringAfterLast('/')?.toIntOrNull()
+            ?: findGatewayId(serial)
+            ?: throw CozyException("Хмара не повернула id приладу: ${res.body.take(200)}")
+    }
+
+    /** Прив'язати шлюз до будинку. Спершу новий спосіб (через виконання), якщо ні — старий. */
+    fun attachGateway(setupId: Int, gatewayId: Int) {
+        val body = Json.stringify(mapOf("gatewayId" to gatewayId))
+        val res = authed("POST", "/magellan/executions/setups/$setupId/attach-gateway", body)
+        when {
+            res.code in 200..299 -> {
+                val exec = res.json().let { if (it is Map<*, *>) it.asMap()["executionId"] ?: it.asMap()["id"] else it }.asStringOrNull()
+                if (!exec.isNullOrBlank()) waitExecution(exec.trim('"'), maxPolls = 90, intervalMs = 2000)
+            }
+            res.code == 429 -> throw CozyException("Забагато спроб прив'язки — зачекайте кілька хвилин і повторіть.", 429)
+            res.code == 451 -> throw CozyException("На приладі діє сервісний контракт — прив'язка лише через підтримку Atlantic.", 451)
+            else -> {
+                log("attach-gateway -> ${res.code} ${res.body.take(200)}; пробую старий спосіб")
+                val old = http("POST", "/magellan/cozytouch/setups/$setupId/attachgateway", body, headers() + ("bypassgam" to "false"))
+                if (old.code !in 200..299) {
+                    // вже прив'язаний до цього будинку — не помилка
+                    if (old.body.contains("already", ignoreCase = true)) return
+                    throw CozyException("Не вдалося прив'язати прилад до будинку: HTTP ${old.code} ${old.body.take(200)}", old.code)
+                }
+            }
+        }
+    }
+
+    /** Стан виявлення шлюзу: 0 невідомо, 1 ідентифіковано, 2 виявлено, 3 синхронізовано, 4 помилка. */
+    fun gatewayDiscoverStatus(gatewayId: Int): Int? {
+        for (path in listOf("/magellan/v2/gateways/$gatewayId/discover-status", "/magellan/gateways/$gatewayId/discover-status")) {
+            val res = runCatching { authed("GET", path) }.getOrNull() ?: continue
+            if (res.code in 200..299) return res.json().asMap()["discoverStatus"].asLongOrNull()?.toInt()
+        }
+        return null
+    }
+
+    /** Попросити хмару опитати шлюз і знайти прилади на ньому (як «discover» у Cozytouch). Помилки не критичні. */
+    fun requestDiscover(gatewayId: Int) {
+        runCatching { authed("POST", "/magellan/executions/gateways/$gatewayId/discover", "\"\"") }
+        runCatching { authed("POST", "/magellan/devices/discover?gatewayId=$gatewayId", "\"\"") }
+    }
+
+    fun autoConfigureZones(gatewayId: Int) {
+        runCatching { authed("POST", "/magellan/zones/autoconfigure", Json.stringify(mapOf("gatewayId" to gatewayId))) }
+    }
+
+    private fun waitExecution(id: String, maxPolls: Int, intervalMs: Long) {
+        repeat(maxPolls) {
+            sleeper(intervalMs)
+            val st = authed("GET", "/magellan/executions/$id")
+            when (st.json().asMap()["state"].asLongOrNull()) {
+                3L -> return
+                1L, 2L, null -> Unit
+                else -> throw CozyException("Хмара відхилила прив'язку (стан ${st.body.take(120)})")
+            }
+        }
+        throw CozyException("Хмара не завершила прив'язку вчасно")
+    }
+
     // ───────────────────────── HTTP ─────────────────────────
 
-    private data class Res(val code: Int, val body: String) {
+    private data class Res(val code: Int, val body: String, val location: String? = null) {
         fun json(): Any? = if (body.isBlank()) null else Json.parse(body)
         fun requireOk(what: String) {
             when {
@@ -210,6 +303,7 @@ class CozyApi(
         val conn = (URL(baseUrl + path).openConnection() as HttpURLConnection)
         try {
             conn.requestMethod = method
+            conn.instanceFollowRedirects = false
             conn.connectTimeout = TIMEOUT_MS
             conn.readTimeout = TIMEOUT_MS
             conn.setRequestProperty("Accept", "application/json")
@@ -219,10 +313,12 @@ class CozyApi(
                 conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             }
             val code = conn.responseCode
-            val stream = if (code >= 400) conn.errorStream else conn.inputStream
-            val text = stream?.use { it.readBytes().toString(Charsets.UTF_8) } ?: ""
+            val text = if (method == "HEAD") "" else {
+                val stream = if (code >= 400) conn.errorStream else conn.inputStream
+                stream?.use { it.readBytes().toString(Charsets.UTF_8) } ?: ""
+            }
             log("$method $path -> $code")
-            return Res(code, text)
+            return Res(code, text, conn.getHeaderField("Location"))
         } catch (e: SocketTimeoutException) {
             throw CozyException("Сервер Atlantic не відповідає (тайм-аут)", cause = e)
         } catch (e: IOException) {

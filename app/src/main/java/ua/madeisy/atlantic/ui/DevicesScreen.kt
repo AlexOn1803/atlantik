@@ -11,8 +11,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -41,6 +44,13 @@ fun DevicesScreen(st: UiState, vm: AppViewModel) {
                 },
             )
         },
+        floatingActionButton = {
+            if (st.allDevices.isNotEmpty()) ExtendedFloatingActionButton(
+                onClick = { vm.openAddHeater() },
+                icon = { Icon(Icons.Default.Add, null) },
+                text = { Text("Додати обігрівач") },
+            )
+        },
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
             when {
@@ -49,11 +59,14 @@ fun DevicesScreen(st: UiState, vm: AppViewModel) {
                 st.allDevices.isEmpty() -> Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("В акаунті немає пристроїв", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Обігрівач спершу треба один раз додати до Wi‑Fi через офіційний Cozytouch " +
-                            "(«+» → Радіатор → Wi‑Fi Connected heater → інтерфейс BD0). " +
-                            "Після цього ним можна керувати звідси.",
+                        "Додайте свій Wi‑Fi обігрівач Atlantic прямо звідси — знадобиться PIN-id з наклейки " +
+                            "і пароль від домашнього Wi‑Fi 2.4 ГГц.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Button(onClick = { vm.openAddHeater() }) {
+                        Icon(Icons.Default.Add, null)
+                        Text("  Додати обігрівач")
+                    }
                     st.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 }
                 else -> LazyColumn(

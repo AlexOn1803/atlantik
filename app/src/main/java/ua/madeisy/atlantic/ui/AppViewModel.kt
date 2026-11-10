@@ -23,6 +23,20 @@ import ua.madeisy.atlantic.core.Heater
 import ua.madeisy.atlantic.core.Setup
 import ua.madeisy.atlantic.core.Slot
 import ua.madeisy.atlantic.data.CredentialStore
+import ua.madeisy.atlantic.data.WifiApConnector
+import ua.madeisy.atlantic.core.Pairer
+import ua.madeisy.atlantic.core.PairStep
+import ua.madeisy.atlantic.core.PairingCodes
+
+data class PairUi(
+    val running: Boolean = false,
+    val step: PairStep? = null,
+    val done: Set<PairStep> = emptySet(),
+    val error: String? = null,
+    val success: Boolean = false,
+    val newDeviceId: Long? = null,
+    val log: List<String> = emptyList(),
+)
 
 data class UiState(
     val checkingSaved: Boolean = true,
@@ -39,6 +53,8 @@ data class UiState(
     val consumptions: List<ConsumptionDay>? = null,
     val message: String? = null,
     val error: String? = null,
+    val addingHeater: Boolean = false,
+    val pair: PairUi = PairUi(),
 ) {
     val allDevices: List<Pair<Setup, Device>> get() = setups.flatMap { s -> s.devices.map { s to it } }
     val selected: Pair<Setup, Device>? get() = allDevices.firstOrNull { it.second.deviceId == selectedDeviceId }
@@ -231,6 +247,62 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         command(ids.ifEmpty { setOf(-1) }, opt, if (days == null) "Відсутність вимкнено" else "Відсутність на $days дн.") { heater, setup ->
             heater.setAway(api, setup, start, end, now)
         }
+    }
+
+    // ───── Додавання обігрівача ─────
+
+    fun openAddHeater() = _state.update { it.copy(addingHeater = true, pair = PairUi()) }
+
+    fun closeAddHeater() {
+        if (_state.value.pair.running) return
+        _state.update { it.copy(addingHeater = false, pair = PairUi()) }
+    }
+
+    /** code — PIN-id (12 цифр) або текст QR-коду з панелі обігрівача. */
+    fun startPairing(code: String, homeSsid: String, homePassword: String) {
+        val ap = PairingCodes.fromQr(code) ?: runCatching { PairingCodes.fromPin(code) }.getOrElse { e ->
+            _state.update { it.copy(pair = PairUi(error = e.message)) }; return
+        }
+        if (homeSsid.isBlank()) {
+            _state.update { it.copy(pair = PairUi(error = "Вкажіть назву домашньої Wi‑Fi мережі (2.4 ГГц)")) }
+            return
+        }
+        _state.update { it.copy(pair = PairUi(running = true)) }
+        fun addLog(line: String) {
+            android.util.Log.d("CozyPair", line)
+            _state.update { st -> st.copy(pair = st.pair.copy(log = (st.pair.log + line).takeLast(200))) }
+        }
+        viewModelScope.launch {
+            try {
+                val id = withContext(Dispatchers.IO) {
+                    Pairer(
+                        api = api,
+                        connector = WifiApConnector(getApplication<android.app.Application>()),
+                        onStep = { step ->
+                            _state.update { st ->
+                                val prev = st.pair.step
+                                st.copy(pair = st.pair.copy(step = step, done = if (prev != null) st.pair.done + prev else st.pair.done))
+                            }
+                            addLog("▶ ${step.title}")
+                        },
+                        log = { addLog(it) },
+                    ).run(ap, homeSsid, homePassword)
+                }
+                _state.update { st ->
+                    st.copy(pair = st.pair.copy(running = false, success = true, newDeviceId = id, done = PairStep.values().toSet(), step = null))
+                }
+                loadDevices()
+            } catch (e: Exception) {
+                addLog("✖ ${e.message}")
+                _state.update { st -> st.copy(pair = st.pair.copy(running = false, error = e.message ?: e.toString())) }
+            }
+        }
+    }
+
+    fun finishPairing() {
+        val id = _state.value.pair.newDeviceId
+        _state.update { it.copy(addingHeater = false, pair = PairUi()) }
+        if (id != null) openDevice(id) else loadDevices()
     }
 
     fun consumeMessage() = _state.update { it.copy(message = null) }
