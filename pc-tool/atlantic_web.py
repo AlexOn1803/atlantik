@@ -396,12 +396,49 @@ def heater_pin():
 
 
 def heater_send_wifi(ssid, password):
-    r = heater_session(msg_wifi(ssid, password), lambda x: x["kind"] in ("OK", "ACK", "ERROR"), 10)
-    if r and r["kind"] == "ERROR":
-        raise Fail(f"Обігрівач відхилив дані Wi-Fi (result {r.get('result')})")
-    if r is None:
-        log("Модуль не підтвердив, але часто він просто одразу перемикається на роутер.")
-    return r["kind"] if r else "no-reply"
+    """Як Cozytouch: надіслати 3 команди і НЕ закривати з'єднання, поки модуль 4 с мовчить
+    (або сам закриє). Повертає {commandId: result}."""
+    payload = msg_wifi(ssid, password)
+    expected = [c["command"]["id"] for c in json.loads(payload)["modbuslink"][0]["execution"]["commands"]]
+    ws = WS(HEATER_HOST, HEATER_PORT)
+    results = {}
+    try:
+        log("WS → " + re.sub(r'"data":"[^"]*"', '"data":"…"', payload))
+        ws.send(payload)
+        hard_end = time.time() + 30
+        while time.time() < hard_end:
+            try:
+                m = ws.recv(4.0)
+            except socket.timeout:
+                log("Модуль 4 с мовчить — завершую, як Cozytouch")
+                break
+            if m is None:
+                log("Модуль закрив з'єднання (перемикається на роутер)")
+                break
+            log("WS ← " + m[:300])
+            try:
+                cr = json.loads(m)["box"]["modules"][0]["modbuslink"][0].get("commandResult")
+            except Exception:
+                cr = None
+            if cr:
+                results.setdefault(str(cr.get("commandId")), []).append(cr.get("result"))
+            if all(5 in results.get(i, []) for i in expected):
+                log("Усі команди виконані (result 5) — чекаю, щоб модуль застосував")
+                try:
+                    ws.recv(4.0)
+                except Exception:
+                    pass
+                break
+    finally:
+        ws.close()
+    summary = ", ".join(f"cmd {i}: {results.get(i, '—')}" for i in expected)
+    log("Підсумок команд: " + summary + "  (4 = прийнято, 5 = виконано)")
+    bad = [i for i in expected if any(r not in (4, 5) for r in results.get(i, []))]
+    if bad:
+        raise Fail(f"Модуль відхилив команди {bad}: {summary}")
+    if any(5 not in results.get(i, []) for i in expected):
+        log("УВАГА: не всі команди підтверджені як виконані")
+    return summary
 
 
 # ─────────────────────────────── хмара ───────────────────────────────
@@ -516,10 +553,27 @@ class Cloud:
             return f["gatewayId"]
         raise Fail("Хмара не повернула id шлюзу: " + text[:200])
 
+    SYNC_PATHS = ["/magellan/gateways/issynchronized?serialNumber={s}",
+                  "/magellan/gateways/issynchronized?gatewaySerialNumber={s}",
+                  "/magellan/gateways/issynchronized?pinid={s}",
+                  "/magellan/v2/gateways/issynchronized?serialNumber={s}",
+                  "/magellan/gateways/issynchronized/{s}",
+                  "/magellan/gateways/{s}/issynchronized"]
+    sync_path = None
+
     def is_synced(self, serial):
-        code, text, _ = self.authed("GET", "/magellan/gateways/issynchronized?serialNumber=" + urllib.parse.quote(serial))
+        q = urllib.parse.quote(serial)
+        paths = [self.sync_path] if self.sync_path else self.SYNC_PATHS
+        code, text = None, ""
+        for tpl in paths:
+            code, text, _ = self.authed("GET", tpl.format(s=q))
+            if code != 405:
+                if self.sync_path is None:
+                    log(f"issynchronized: робочий шлях {tpl}")
+                self.sync_path = tpl
+                break
         log(f"issynchronized -> {code} {text[:120]}")
-        if code // 100 != 2:
+        if code is None or code // 100 != 2:
             return None
         j = self.js(text)
         if isinstance(j, bool):

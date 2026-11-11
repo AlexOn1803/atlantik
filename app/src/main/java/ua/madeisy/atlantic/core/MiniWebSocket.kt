@@ -216,10 +216,45 @@ class Bd1Local(private val factory: SocketFactory, private val log: (String) -> 
         return null
     }
 
-    /** Передати Wi‑Fi. Повертає true, якщо модуль підтвердив (або закрив з'єднання, перемикаючись). */
+    /**
+     * Передати Wi‑Fi. Як Cozytouch: з'єднання НЕ закриваємо після першої відповіді — модуль підтверджує
+     * кожну з 3 команд окремо (4 = прийнято, 5 = виконано); закриваємо, коли він 4 с мовчить або сам закриє.
+     * Повертає true, якщо щось підтверджено.
+     */
     fun sendWifi(ssid: String, password: String): Boolean {
-        val r = session(Bd1Protocol.wifiConfig(ssid, password), { it.kind != Bd1Protocol.Kind.OTHER }, 10_000)
-        if (r?.kind == Bd1Protocol.Kind.ERROR) throw CozyException("Обігрівач відхилив дані Wi‑Fi (перевірте назву і пароль).")
-        return r != null
+        val payload = Bd1Protocol.wifiConfig(ssid, password)
+        val expected = Json.parse(payload).asMap()["modbuslink"].asList()[0].asMap()["execution"].asMap()["commands"].asList()
+            .map { it.asMap()["command"].asMap()["id"].toString() }
+        val results = LinkedHashMap<String, MutableList<Int>>()
+        val ws = MiniWebSocket.connect(Bd1Protocol.HOST, Bd1Protocol.PORT, factory = factory)
+        try {
+            log("WS → " + payload.replace(Regex("\"data\":\"[^\"]*\""), "\"data\":\"…\""))
+            ws.sendText(payload)
+            val hardEnd = System.currentTimeMillis() + 30_000
+            while (System.currentTimeMillis() < hardEnd) {
+                val msg = try { ws.readText(4_000) } catch (e: SocketTimeoutException) { log("модуль 4 с мовчить — завершую"); break }
+                    ?: run { log("модуль закрив з'єднання (перемикається на роутер)"); null } ?: break
+                log("WS ← ${msg.take(300)}")
+                val cr = runCatching {
+                    Json.parse(msg).asMap()["box"].asMap()["modules"].asList()[0].asMap()["modbuslink"].asList()[0].asMap()["commandResult"]
+                }.getOrNull()
+                if (cr != null) {
+                    val id = cr.asMap()["commandId"]?.toString() ?: "?"
+                    val r = cr.asMap()["result"].asLongOrNull()?.toInt() ?: -1
+                    results.getOrPut(id) { mutableListOf() } += r
+                }
+                if (expected.all { 5 in (results[it] ?: emptyList<Int>()) }) {
+                    log("усі команди виконані — чекаю, поки модуль застосує")
+                    runCatching { ws.readText(4_000) }
+                    break
+                }
+            }
+        } finally {
+            ws.close()
+        }
+        log("Підсумок: " + expected.joinToString { "cmd $it: ${results[it] ?: "—"}" } + " (4 прийнято, 5 виконано)")
+        if (results.values.flatten().any { it != 4 && it != 5 && it != -1 })
+            throw CozyException("Обігрівач відхилив дані Wi‑Fi (перевірте назву і пароль).")
+        return results.isNotEmpty()
     }
 }

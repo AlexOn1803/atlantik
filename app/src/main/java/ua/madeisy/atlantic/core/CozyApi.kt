@@ -256,8 +256,24 @@ class CozyApi(
     }
 
     /** Чи синхронізувався шлюз з хмарою (null — хмара не відповіла). */
+    @Volatile private var syncPath: String? = null
+
     fun isGatewaySynchronized(serial: String): Boolean? {
-        val res = authed("GET", "/magellan/gateways/issynchronized?serialNumber=" + URLEncoder.encode(serial, "UTF-8"))
+        // GET ?serialNumber= повертає 405 — шлях невідомий напевно, тож перебираємо і запам'ятовуємо робочий
+        val q = URLEncoder.encode(serial, "UTF-8")
+        val variants = syncPath?.let { listOf(it) } ?: listOf(
+            "/magellan/gateways/issynchronized?serialNumber={s}",
+            "/magellan/gateways/issynchronized?gatewaySerialNumber={s}",
+            "/magellan/gateways/issynchronized?pinid={s}",
+            "/magellan/v2/gateways/issynchronized?serialNumber={s}",
+            "/magellan/gateways/issynchronized/{s}",
+            "/magellan/gateways/{s}/issynchronized",
+        )
+        var res = Res(0, "")
+        for (v in variants) {
+            res = authed("GET", v.replace("{s}", q))
+            if (res.code != 405) { syncPath = v; break }
+        }
         log("issynchronized $serial -> ${res.code} ${res.body.take(80)}")
         if (res.code !in 200..299) return null
         val j = res.json()
