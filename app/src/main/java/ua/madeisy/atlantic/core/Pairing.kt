@@ -319,21 +319,18 @@ class Pairer(
                     "Цей обігрівач (${foreign[0]}) прив'язаний до іншого акаунта Cozytouch. Його має відв'язати попередній " +
                         "власник або підтримка Atlantic (0 800 50-08-85).", 403,
                 )
-                candidates.size == 1 -> {
-                    val sn = PairingCodes.formatSerial(candidates[0])
-                    runCatching { api.createGateway(sn) }.getOrNull()?.let { serial = sn; gatewayId = it }
+                else -> {
+                    // Хмара знає тип шлюзу за серійним номером із заводської бази: для неправильного номера
+                    // реєстрація дає 400 «Unknown gateway type». Тож пробуємо варіанти по черзі — підходить лише
+                    // справжній (так знайшли 5151… замість зіпсованого \x16151…). Чужі (403/451) пропускаємо.
+                    for (c in candidates) {
+                        val sn = PairingCodes.formatSerial(c)
+                        if (sn in foreign) continue
+                        val id = runCatching { api.createGateway(sn) }
+                            .onFailure { log("$sn: ${it.message?.take(100)}") }.getOrNull()
+                        if (id != null) { serial = sn; gatewayId = id; log("Справжній PIN-id: $c"); break }
+                    }
                 }
-            }
-            if (gatewayId == null && found.isEmpty() && candidates.size > 1) {
-                // Хмара ще не має запису шлюзу — питаємо, який із номерів зараз на зв'язку (лише читання)
-                val online = candidates.map { PairingCodes.formatSerial(it) }
-                    .filter { sn -> runCatching { api.isGatewaySynchronized(sn) }.getOrNull() == true }
-                log("На зв'язку: $online")
-                if (online.size == 1) {
-                    val sn = online[0]
-                    val id = api.findGatewayId(sn) ?: api.createGateway(sn)
-                    serial = sn; gatewayId = id
-                } else if (online.size > 1) throw CozyException("На зв'язку кілька номерів: $online. Потрібен точний PIN-id.")
             }
             if (gatewayId == null) sleeper(10_000)
         }

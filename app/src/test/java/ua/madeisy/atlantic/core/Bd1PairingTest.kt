@@ -151,16 +151,17 @@ class Bd1PairingTest {
         val heads = mutableListOf<String>()
         var created = false
         var att = false
-        val cloud = FakeHttp { m, p, _ ->
+        val cloud = FakeHttp { m, p, b ->
             when {
                 p == "/users/token" -> Triple(200, """{"access_token":"T","expires_in":3600}""", emptyMap())
                 p == "/magellan/setups" -> Triple(200, """[{"id":7}]""", emptyMap())
-                m == "HEAD" -> { heads += p; if (p.endsWith("serialNumber=3151-0852-4955")) Triple(200, "", mapOf("Location" to "/magellan/gateways/44")) else Triple(404, "", emptyMap()) }
-                m == "POST" && p == "/magellan/gateways" -> { created = true; Triple(201, "1", emptyMap()) }
+                m == "HEAD" -> { heads += p; if (created) Triple(200, "", mapOf("Location" to "/magellan/gateways/44")) else Triple(404, "", emptyMap()) }
+                m == "POST" && p == "/magellan/gateways" -> if (b.contains("5151-0852-4955")) { created = true; Triple(201, "44", emptyMap()) }
+                    else Triple(400, """{"code":43000302,"type":"GatewayUnknownGatewayType"}""", emptyMap())
                 p.startsWith("/magellan/gateways/issynchronized") -> Triple(200, """{"isSynchronized":true}""", emptyMap())
                 p == "/magellan/executions/setups/7/attach-gateway" -> { att = true; Triple(201, "9", emptyMap()) }
                 p == "/magellan/executions/9" -> Triple(200, """{"state":3}""", emptyMap())
-                p == "/magellan/cozytouch/setupviewv2" -> Triple(200, if (!att) """[{"id":7,"devices":[]}]""" else """[{"id":7,"devices":[{"deviceId":77,"productId":41,"gatewaySerialNumber":"3151-0852-4955","capabilities":[]}]}]""", emptyMap())
+                p == "/magellan/cozytouch/setupviewv2" -> Triple(200, if (!att) """[{"id":7,"devices":[]}]""" else """[{"id":7,"devices":[{"deviceId":77,"productId":41,"gatewaySerialNumber":"5151-0852-4955","capabilities":[]}]}]""", emptyMap())
                 else -> Triple(404, "", emptyMap())
             }
         }
@@ -174,7 +175,7 @@ class Bd1PairingTest {
         var t = 0L
         val id = Pairer(api, connector, sleeper = { t += it }, clock = { t }).runBd1("3DN9C", "pw")
         check(id == 77L, "found device via candidate probing: $id")
-        check(!created, "no gateway created for guessed pins")
+        check(created, "real serial found by registration probing")
         check(heads.size >= 10, "probed all candidates ${heads.size}")
         cloud.close(); module.server.close()
         assertEquals("невдалих перевірок", 0, failures)
