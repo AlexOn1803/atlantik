@@ -11,6 +11,23 @@ import java.net.URL
 data class DeviceAp(val ssid: String, val password: String, val serial: String)
 
 object PairingCodes {
+    /**
+     * Можливі PIN-id з сирого значення модуля. Деякі модулі BD1 віддають перший символ
+     * зіпсованим (напр. 0x16 + 11 цифр) — тоді повертаємо 10 варіантів першої цифри.
+     */
+    fun pinCandidates(raw: String?): List<String> {
+        if (raw == null) return emptyList()
+        val digits = raw.filter { it.isDigit() }
+        return when {
+            digits.length == 12 -> listOf(digits)
+            digits.length == 11 -> {
+                val firstBad = raw.isNotEmpty() && !raw[0].isDigit()
+                if (firstBad) (0..9).map { "$it$digits" } else (0..9).map { "$it$digits" } + (0..9).map { "$digits$it" }
+            }
+            else -> emptyList()
+        }
+    }
+
     const val SSID_PREFIX = "GA-"
 
     /**
@@ -258,13 +275,16 @@ class Pairer(
         onStep(PairStep.AP_CONNECT)
         val ssidExact = apSuffix?.trim()?.takeIf { it.isNotEmpty() }?.let { Bd1Protocol.AP_PREFIX + it }
         val link = connectBd1Ap(ssidExact)
-        var pin: String? = null
+        val manual = knownPin?.filter { it.isDigit() }?.takeIf { it.length == 12 }
+        var candidates: List<String> = emptyList()
+        var rawPin: String? = null
         try {
             val local = Bd1Local(link.socketFactory, log)
-            pin = local.readPin() ?: knownPin?.filter { it.isDigit() }?.takeIf { it.length == 12 }
-            log("PIN приладу: ${pin ?: "не прочитано"}")
-            if (pin == null) throw CozyException(
-                "Обігрівач не повідомив свій PIN-id. Введіть його вручну (12 цифр з меню приладу) і повторіть.",
+            rawPin = local.readPinRaw()
+            candidates = if (manual != null) listOf(manual) else PairingCodes.pinCandidates(rawPin)
+            log("Варіанти PIN: ${candidates.size} ${candidates.take(3)}${if (candidates.size > 3) "…" else ""}")
+            if (candidates.isEmpty()) throw CozyException(
+                "Обігрівач не повідомив свій PIN-id. Введіть його вручну (12 цифр з меню приладу: Зв'язок → Інформація) і повторіть.",
             )
             onStep(PairStep.SEND_WIFI)
             val confirmed = local.sendWifi(homeSsid.trim(), homePassword)
@@ -273,21 +293,53 @@ class Pairer(
             connector.disconnect()
         }
 
-        val serial = PairingCodes.formatSerial(pin!!)
         onStep(PairStep.WAIT_CLOUD)
         sleeper(10_000) // прилад підключається до роутера, телефон — назад в інтернет
         var gatewayId: Int? = null
+        var serial: String? = null
         val until = clock() + 240_000
-        while (clock() < until) {
-            gatewayId = runCatching { api.findGatewayId(serial) }.getOrElse { e -> if (e is CozyException && e.httpCode in listOf(403, 451)) throw e; null }
-                ?: runCatching { api.createGateway(serial) }.getOrNull()
-            if (gatewayId != null) {
-                val sync = runCatching { api.isGatewaySynchronized(serial) }.getOrNull()
-                log("gatewayId=$gatewayId synchronized=$sync")
-                if (sync != false) break
+        while (clock() < until && gatewayId == null) {
+            val found = ArrayList<Pair<String, Int>>()
+            val foreign = ArrayList<String>()
+            for (c in candidates) {
+                val sn = PairingCodes.formatSerial(c)
+                try {
+                    api.findGatewayId(sn)?.let { found += sn to it }
+                } catch (e: CozyException) {
+                    if (e.httpCode == 403 || e.httpCode == 451) foreign += sn else log("$sn: ${e.message}")
+                }
             }
+            log("Хмара: знайдено ${found.map { it.first }}, чужі ${foreign}")
+            when {
+                found.size == 1 -> { serial = found[0].first; gatewayId = found[0].second }
+                found.size > 1 -> throw CozyException(
+                    "Підходить кілька PIN-id: ${found.joinToString { it.first }}. Подивіться PIN у меню обігрівача і введіть його вручну.",
+                )
+                candidates.size == 1 && foreign.isNotEmpty() -> throw CozyException(
+                    "Цей обігрівач (${foreign[0]}) прив'язаний до іншого акаунта Cozytouch. Його має відв'язати попередній " +
+                        "власник або підтримка Atlantic (0 800 50-08-85).", 403,
+                )
+                candidates.size == 1 -> {
+                    val sn = PairingCodes.formatSerial(candidates[0])
+                    runCatching { api.createGateway(sn) }.getOrNull()?.let { serial = sn; gatewayId = it }
+                }
+            }
+            if (gatewayId == null) sleeper(10_000)
+        }
+        if (gatewayId == null && candidates.size > 1) {
+            val shown = "?" + (rawPin ?: "").filter { it.isDigit() }
+            throw CozyException(
+                "Обігрівач отримав Wi‑Fi, але його PIN-id прийшов неповним ($shown — перша цифра невідома) і хмара не впізнала жоден варіант. " +
+                    "Подивіться повний PIN у меню обігрівача (Зв'язок → Інформація), введіть у поле PIN і повторіть.",
+            )
+        }
+        while (gatewayId != null && clock() < until) {
+            val sync = runCatching { api.isGatewaySynchronized(serial!!) }.getOrNull()
+            log("gatewayId=$gatewayId synchronized=$sync")
+            if (sync != false) break
             sleeper(10_000)
         }
+        val serialFinal = serial ?: ""
         val gid = gatewayId ?: throw CozyException("Хмара не бачить обігрівач. Перевірте пароль Wi‑Fi і що мережа 2.4 ГГц, та повторіть.")
 
         onStep(PairStep.CLOUD_REGISTER)
@@ -295,7 +347,7 @@ class Pairer(
         api.attachGateway(setupId, gid)
 
         onStep(PairStep.DISCOVER)
-        return waitForDevice(gid, serial, knownBefore)
+        return waitForDevice(gid, serialFinal, knownBefore)
     }
 
     private fun connectBd1Ap(exact: String?): ApLink {

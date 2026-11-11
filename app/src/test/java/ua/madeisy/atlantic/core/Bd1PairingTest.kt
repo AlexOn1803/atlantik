@@ -142,4 +142,41 @@ class Bd1PairingTest {
         cloud.close(); module.server.close()
         assertEquals("невдалих перевірок", 0, failures)
     }
+
+    @Test
+    fun corruptedFirstPinByte() {
+        check(PairingCodes.pinCandidates("\u0016" + "15108524955").size == 10, "10 candidates for bad first byte")
+        check(PairingCodes.pinCandidates("123456789012") == listOf("123456789012"), "clean pin")
+        val module = FakeBd1Module("\u0016" + "15108524955")
+        val heads = mutableListOf<String>()
+        var created = false
+        var att = false
+        val cloud = FakeHttp { m, p, _ ->
+            when {
+                p == "/users/token" -> Triple(200, """{"access_token":"T","expires_in":3600}""", emptyMap())
+                p == "/magellan/setups" -> Triple(200, """[{"id":7}]""", emptyMap())
+                m == "HEAD" -> { heads += p; if (p.endsWith("serialNumber=3151-0852-4955")) Triple(200, "", mapOf("Location" to "/magellan/gateways/44")) else Triple(404, "", emptyMap()) }
+                m == "POST" && p == "/magellan/gateways" -> { created = true; Triple(201, "1", emptyMap()) }
+                p.startsWith("/magellan/gateways/issynchronized") -> Triple(200, """{"isSynchronized":true}""", emptyMap())
+                p == "/magellan/executions/setups/7/attach-gateway" -> { att = true; Triple(201, "9", emptyMap()) }
+                p == "/magellan/executions/9" -> Triple(200, """{"state":3}""", emptyMap())
+                p == "/magellan/cozytouch/setupviewv2" -> Triple(200, if (!att) """[{"id":7,"devices":[]}]""" else """[{"id":7,"devices":[{"deviceId":77,"productId":41,"gatewaySerialNumber":"3151-0852-4955","capabilities":[]}]}]""", emptyMap())
+                else -> Triple(404, "", emptyMap())
+            }
+        }
+        val connector = object : ApConnector {
+            override fun connect(target: ApTarget, timeoutMs: Long) =
+                ApLink({ URL("http://127.0.0.1:1/").openConnection() as HttpURLConnection }, RedirectFactory(module.server.localPort))
+            override fun disconnect() {}
+        }
+        val api = CozyApi(baseUrl = "http://127.0.0.1:${cloud.port}", sleeper = {})
+        api.login("a@b.c", "x")
+        var t = 0L
+        val id = Pairer(api, connector, sleeper = { t += it }, clock = { t }).runBd1("3DN9C", "pw")
+        check(id == 77L, "found device via candidate probing: $id")
+        check(!created, "no gateway created for guessed pins")
+        check(heads.size >= 10, "probed all candidates ${heads.size}")
+        cloud.close(); module.server.close()
+        assertEquals("невдалих перевірок", 0, failures)
+    }
 }

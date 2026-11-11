@@ -195,13 +195,15 @@ class Bd1Local(private val factory: SocketFactory, private val log: (String) -> 
         }
     }
 
-    /** PIN-id (12 цифр) з самого приладу, або null. */
-    fun readPin(): String? {
+    /** Сирий вміст регістрів PIN (180×6) як текст, або null. */
+    fun readPinRaw(): String? {
         repeat(2) {
             val r = runCatching { session(Bd1Protocol.readPin(), { it.kind == Bd1Protocol.Kind.DATA }, 10_000) }
                 .onFailure { log("readPin: ${it.message}") }.getOrNull()
-            val digits = r?.data?.filter { c -> c.isDigit() }
-            if (r?.kind == Bd1Protocol.Kind.DATA && digits?.length == 12) return digits
+            if (r?.kind == Bd1Protocol.Kind.DATA && r.data != null) {
+                log("PIN (сирий): " + r.data.map { c -> if (c.isDigit()) c.toString() else "\\x%02x".format(c.code) }.joinToString(""))
+                return r.data
+            }
         }
         return null
     }
