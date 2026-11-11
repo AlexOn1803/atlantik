@@ -346,8 +346,21 @@ class WS:
             pass
 
 
+def ws_connect(tries=4):
+    last = None
+    for i in range(tries):
+        try:
+            return WS(HEATER_HOST, HEATER_PORT)
+        except (OSError, Fail) as e:
+            last = e
+            log(f"WS спроба {i + 1}/{tries}: {e}")
+            time.sleep(3)
+    raise Fail(f"Модуль приймає з'єднання, але одразу його скидає ({last}). Найчастіше: режим підключення "
+               f"на обігрівачі завершився або модуль перезапускається. Увімкніть знову Меню → Зв'язок → Підключення.")
+
+
 def heater_session(payload, want, timeout=10):
-    ws = WS(HEATER_HOST, HEATER_PORT)
+    ws = ws_connect()
     try:
         log("WS → " + (re.sub(r'"data":"[^"]*"', '"data":"…"', payload) if '"startingAddress":98' in payload else payload))
         ws.send(payload)
@@ -400,7 +413,7 @@ def heater_send_wifi(ssid, password):
     (або сам закриє). Повертає {commandId: result}."""
     payload = msg_wifi(ssid, password)
     expected = [c["command"]["id"] for c in json.loads(payload)["modbuslink"][0]["execution"]["commands"]]
-    ws = WS(HEATER_HOST, HEATER_PORT)
+    ws = ws_connect()
     results = {}
     try:
         log("WS → " + re.sub(r'"data":"[^"]*"', '"data":"…"', payload))
