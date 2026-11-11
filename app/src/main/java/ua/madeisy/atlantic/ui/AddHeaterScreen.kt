@@ -116,8 +116,9 @@ private fun Form(
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("1. Увімкніть на обігрівачі режим підключення", style = MaterialTheme.typography.titleSmall)
             Text(
-                "Затисніть кнопку вибору режиму (OK) приблизно на 5 секунд, доки індикатор Wi‑Fi не почне " +
-                    "повільно блимати. Тримайте телефон поруч.",
+                "На обігрівачі: Меню → Зв'язок (Connectivity) → Підключення (Connection). " +
+                    "У списку Wi‑Fi телефона має з'явитися мережа ELEC_HEATER_Wifi_xxxx. Пароль їй не потрібен " +
+                    "(якщо з замком — WIFIHVAC), застосунок підключиться сам. Тримайте телефон поруч.",
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
