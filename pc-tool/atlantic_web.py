@@ -815,6 +815,32 @@ def api(path, p):
         return {"gatewayId": CLOUD_API.create_gateway(fmt_serial(p["pin"]))}
     if path == "/api/cloud/sync":
         return {"synchronized": CLOUD_API.is_synced(fmt_serial(p["pin"]))}
+    if path == "/api/cloud/probe":
+        d = re.sub(r"\D", "", p.get("pin") or "")
+        if len(d) < 11:
+            raise Fail("Введіть PIN (останні 11 цифр достатньо)")
+        tail = d[-11:]
+        out = []
+        for first in "0123456789":
+            serial = fmt_serial(first + tail)
+            f = CLOUD_API.find_gateway(serial)
+            if f["gatewayId"]:
+                out.append(f"{serial}: вже є в хмарі, id {f['gatewayId']} (HTTP {f['code']})")
+                return {"text": "\n".join(out), "gatewayId": f["gatewayId"], "serial": serial}
+            if f["code"] in (403, 451):
+                out.append(f"{serial}: належить іншому акаунту (HTTP {f['code']}) — пропускаю")
+                continue
+            code, text, loc = CLOUD_API.authed("POST", "/magellan/gateways", json.dumps({"serialNumber": serial}))
+            if code // 100 == 2:
+                j = CLOUD_API.js(text)
+                gid = j if isinstance(j, int) else (int(str(j).strip('"')) if str(j).strip('"').isdigit() else None)
+                out.append(f"{serial}: ЗАРЕЄСТРОВАНО, id шлюзу {gid}")
+                log(f"Знайдено правильний PIN: {first + tail}")
+                return {"text": "\n".join(out), "gatewayId": gid, "serial": serial}
+            msg = "невідомий тип" if "UnknownGatewayType" in text else text[:120]
+            out.append(f"{serial}: HTTP {code} {msg}")
+            time.sleep(1.5)
+        return {"text": "\n".join(out) + "\nЖоден варіант не підійшов.", "gatewayId": None}
     if path == "/api/cloud/attach":
         sid = int(p["setupId"]) if p.get("setupId") else CLOUD_API.setup_ids()[0]
         CLOUD_API.attach(sid, int(p["gatewayId"]))
@@ -945,6 +971,7 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:
 <button onclick="call('/api/cloud/find',{pin:v('pin')},r=>out('cl',JSON.stringify(r)))">Знайти шлюз</button>
 <button onclick="call('/api/cloud/sync',{pin:v('pin')},r=>out('cl','Синхронізований: '+r.synchronized))">Онлайн?</button>
 <button onclick="if(confirm('Зареєструвати шлюз з цим PIN на ваш акаунт?'))call('/api/cloud/create',{pin:v('pin')},r=>{out('cl','id шлюзу: '+r.gatewayId);$('gw').value=r.gatewayId})">Зареєструвати шлюз</button>
+<button onclick="out('cl','Перевіряю 10 варіантів першої цифри…');call('/api/cloud/probe',{pin:v('pin')},r=>{out('cl',r.text);if(r.gatewayId){$('gw').value=r.gatewayId;$('pin').value=r.serial.replace(/-/g,'')}})">Підібрати першу цифру PIN</button>
 <div class="row"><div><label>id шлюзу</label><input id="gw"></div><div><label>id будинку (порожньо = перший)</label><input id="sid"></div>
 <div style="flex:0"><button onclick="call('/api/cloud/attach',{gatewayId:v('gw'),setupId:v('sid')},r=>out('cl','✔ Прив\'язано до '+r.setupId))">Прив'язати</button></div></div>
 <pre id="cl">—</pre>
