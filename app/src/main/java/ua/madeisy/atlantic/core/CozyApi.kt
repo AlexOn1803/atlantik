@@ -272,7 +272,7 @@ class CozyApi(
         var res = Res(0, "")
         for (v in variants) {
             res = authed("GET", v.replace("{s}", q))
-            if (res.code != 405) { syncPath = v; break }
+            if (res.code != 405 && !res.body.contains("No matching resource")) { syncPath = v; break }
         }
         log("issynchronized $serial -> ${res.code} ${res.body.take(80)}")
         if (res.code !in 200..299) return null

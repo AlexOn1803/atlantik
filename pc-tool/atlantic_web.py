@@ -428,7 +428,7 @@ def heater_send_wifi(ssid, password):
             if m is None:
                 log("Модуль закрив з'єднання (перемикається на роутер)")
                 break
-            log("WS ← " + m[:300])
+            log("WS ← " + (re.sub(r'"value":\s*"[^"]*"', '"value":"…"', m) if '3/98' in m else m[:300]))
             try:
                 cr = json.loads(m)["box"]["modules"][0]["modbuslink"][0].get("commandResult")
             except Exception:
@@ -580,7 +580,7 @@ class Cloud:
         code, text = None, ""
         for tpl in paths:
             code, text, _ = self.authed("GET", tpl.format(s=q))
-            if code != 405:
+            if code != 405 and "No matching resource" not in text:
                 if self.sync_path is None:
                     log(f"issynchronized: робочий шлях {tpl}")
                 self.sync_path = tpl
