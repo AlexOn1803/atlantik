@@ -324,6 +324,17 @@ class Pairer(
                     runCatching { api.createGateway(sn) }.getOrNull()?.let { serial = sn; gatewayId = it }
                 }
             }
+            if (gatewayId == null && found.isEmpty() && candidates.size > 1) {
+                // Хмара ще не має запису шлюзу — питаємо, який із номерів зараз на зв'язку (лише читання)
+                val online = candidates.map { PairingCodes.formatSerial(it) }
+                    .filter { sn -> runCatching { api.isGatewaySynchronized(sn) }.getOrNull() == true }
+                log("На зв'язку: $online")
+                if (online.size == 1) {
+                    val sn = online[0]
+                    val id = api.findGatewayId(sn) ?: api.createGateway(sn)
+                    serial = sn; gatewayId = id
+                } else if (online.size > 1) throw CozyException("На зв'язку кілька номерів: $online. Потрібен точний PIN-id.")
+            }
             if (gatewayId == null) sleeper(10_000)
         }
         if (gatewayId == null && candidates.size > 1) {

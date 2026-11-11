@@ -137,7 +137,7 @@ class Bd1PairingTest {
         val id = Pairer(api, connector, sleeper = { t += it }, clock = { t }, log = { println("  log: $it") }).runBd1("3DN9C", "pass1234")
         check(id == 5005L, "device found $id")
         check(targets.first() == ApTarget(ssidPrefix = "ELEC_HEATER_Wifi_"), "open AP by prefix first ${targets.first()}")
-        check(module.received.size == 2 && module.received[1].contains("\"startingAddress\":82"), "pin read + wifi sent")
+        check(module.received.first().contains("\"startingAddress\":180") && module.received.last().contains("\"startingAddress\":82"), "pin read + wifi sent")
         check(gwCreated && attached && synced >= 2, "cloud create+sync+attach")
         cloud.close(); module.server.close()
         assertEquals("невдалих перевірок", 0, failures)

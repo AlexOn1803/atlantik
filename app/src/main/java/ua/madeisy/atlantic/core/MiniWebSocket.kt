@@ -139,6 +139,9 @@ object Bd1Protocol {
     private fun envelope(commands: List<Map<String, Any?>>) =
         Json.stringify(mapOf("modbuslink" to listOf(mapOf("execution" to mapOf("commands" to commands)))))
 
+    /** Прочитати довільні holding registers (для діагностики). */
+    fun readHolding(start: Int, quantity: Int): String = envelope(listOf(command("1", 3, start, quantity = quantity)))
+
     /** Прочитати PIN-id шлюзу: holding registers 180, 6 шт. */
     fun readPin(): String = envelope(listOf(command("1", 3, 180, quantity = 6)))
 
@@ -202,6 +205,11 @@ class Bd1Local(private val factory: SocketFactory, private val log: (String) -> 
                 .onFailure { log("readPin: ${it.message}") }.getOrNull()
             if (r?.kind == Bd1Protocol.Kind.DATA && r.data != null) {
                 log("PIN (сирий): " + r.data.map { c -> if (c.isDigit()) c.toString() else "\\x%02x".format(c.code) }.joinToString(""))
+                // діагностика: сусідні регістри, щоб зрозуміти зіпсований перший символ
+                for ((st, q) in listOf(170 to 10, 186 to 10, 176 to 4)) {
+                    runCatching { session(Bd1Protocol.readHolding(st, q), { x -> x.kind == Bd1Protocol.Kind.DATA }, 6_000) }
+                        .onFailure { e -> log("read $st×$q: ${e.message}") }
+                }
                 return r.data
             }
         }
