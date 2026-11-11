@@ -45,3 +45,26 @@ jobs:
         with:
           name: AtlanticHeater-apk
           path: app/build/outputs/apk/release/*.apk
+
+  windows-exe:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Збірка AtlanticPC.exe
+        run: |
+          pip install pyinstaller
+          pyinstaller --onefile --name AtlanticPC pc-tool/atlantic_web.py
+      - name: Додати exe до релізу
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          files: dist/AtlanticPC.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AtlanticPC-exe
+          path: dist/AtlanticPC.exe
