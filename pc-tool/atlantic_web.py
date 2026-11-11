@@ -66,9 +66,9 @@ def netsh(*args, timeout=30):
     flags = 0x08000000  # CREATE_NO_WINDOW
     p = subprocess.run(["netsh", "wlan", *args], capture_output=True, timeout=timeout, creationflags=flags)
     raw = p.stdout + p.stderr
-    for enc in ("oem", "cp866", "utf-8", "cp1251"):
+    for enc in ("utf-8", "oem", "cp866", "cp1251"):
         try:
-            return raw.decode(enc)
+            return raw.decode(enc, "strict")
         except Exception:
             continue
     return raw.decode("utf-8", "replace")
@@ -597,7 +597,9 @@ def auto_flow(p):
             raise Fail("В акаунті немає жодного будинку (setup). Створіть його в Cozytouch.")
         log(f"Будинки акаунта: {setups}")
 
-        if p.get("connectAp") and IS_WIN:
+        if wait_heater_reachable(3):
+            log("Модуль обігрівача вже доступний — підключення до його мережі пропускаю")
+        elif p.get("connectAp") and IS_WIN:
             nets, _ = wifi_scan(iface)
             ap = next((n["ssid"] for n in nets if n["ssid"].startswith(AP_PREFIX)), None)
             if not ap:
@@ -637,10 +639,7 @@ def auto_flow(p):
                 pass
 
         gw = f["gatewayId"]
-        if gw is None:
-            gw = CLOUD_API.create_gateway(serial)
-            log(f"Шлюз зареєстровано: id {gw}")
-        else:
+        if gw is not None:
             log(f"Шлюз уже відомий хмарі: id {gw}")
 
         t0 = time.time()
@@ -660,8 +659,23 @@ def auto_flow(p):
                         ap_gone_logged = True
                 except Exception as e:
                     log(f"scan: {e}")
+            if gw is None:
+                fg = CLOUD_API.find_gateway(serial)
+                gw = fg["gatewayId"]
+                if gw is None and fg["code"] == 404:
+                    try:
+                        gw = CLOUD_API.create_gateway(serial)
+                        log(f"Шлюз зареєстровано: id {gw}")
+                    except Fail as e:
+                        if "UnknownGatewayType" in str(e) or "Unknown gateway type" in str(e):
+                            log("Хмара ще не знає тип шлюзу = модуль жодного разу не виходив в інтернет. Чекаю…")
+                        else:
+                            raise
             s = CLOUD_API.is_synced(serial)
-            if s:
+            if s and gw is None:
+                fg = CLOUD_API.find_gateway(serial)
+                gw = fg["gatewayId"] or (CLOUD_API.create_gateway(serial) if fg["code"] == 404 else None)
+            if s and gw is not None:
                 synced = True
                 break
         if not synced:
@@ -707,6 +721,20 @@ def api(path, p):
     if path == "/api/heater/read":
         b = heater_read(int(p["start"]), int(p["qty"]))
         return show_bytes(b)
+    if path == "/api/heater/dump":
+        rows = []
+        start, end, step = int(p.get("start", 0)), int(p.get("end", 260)), int(p.get("step", 8))
+        for a in range(start, end, step):
+            try:
+                b = heater_read(a, step)
+                sb = show_bytes(b)
+                words = [int.from_bytes(b[i:i + 2], "big") for i in range(0, len(b) - 1, 2)]
+                line = f"{a:4d}: {sb['hex']:<{step*6}}  {words}  «{sb['text']}»"
+            except Exception as e:
+                line = f"{a:4d}: помилка {e}"
+            rows.append(line)
+            log("REG " + line)
+        return {"text": "\n".join(rows)}
     if path == "/api/heater/wifi":
         return {"result": heater_send_wifi(p["ssid"], p.get("password", ""))}
     if path == "/api/cloud/login":
@@ -836,6 +864,7 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:
 <button onclick="call('/api/heater/pin',{},r=>{out('heat','PIN: '+(r.pin||'?')+'\nсирий: '+r.raw.text+'\nhex: '+r.raw.hex); if(r.pin&&!v('pin'))$('pin').value=r.pin})">Прочитати PIN</button>
 <div class="row"><div><label>Регістр</label><input id="rs" value="180"></div><div><label>Кількість</label><input id="rq" value="6"></div>
 <div style="flex:0"><button onclick="call('/api/heater/read',{start:v('rs'),qty:v('rq')},r=>out('heat',r.text+'\n'+r.hex))">Читати</button></div></div>
+<button onclick="out('heat','Читаю регістри 0…260, ~1 хв…');call('/api/heater/dump',{start:0,end:260,step:8},r=>out('heat',r.text))">Прочитати всі регістри (діагностика)</button>
 <pre id="heat">—</pre>
 </section>
 
