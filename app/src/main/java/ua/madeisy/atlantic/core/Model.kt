@@ -52,9 +52,13 @@ internal fun parseCapabilities(list: Any?): List<Capability> =
 internal fun parseSetup(raw: Map<String, Any?>): Setup {
     val zones = raw["zones"].asList().map { it.asMap() }
     val zoneNames = zones.associate { (it["id"].asStringOrNull() ?: "") to (it["name"].asStringOrNull() ?: "") }
-    val devices = raw["devices"].asList().mapNotNull { d ->
+    // пристрої бувають у setup.devices, а в деяких акаунтах — усередині zones[].devices / gateways[].devices
+    val rawDevices = raw["devices"].asList() +
+        zones.flatMap { it["devices"].asList() } +
+        raw["gateways"].asList().flatMap { it.asMap()["devices"].asList() }
+    val devices = rawDevices.mapNotNull { d ->
         val m = d.asMap()
-        val id = m["deviceId"].asLongOrNull() ?: return@mapNotNull null
+        val id = (m["deviceId"] ?: m["id"]).asLongOrNull() ?: return@mapNotNull null
         Device(
             deviceId = id,
             modelId = m["modelId"].asLongOrNull()?.toInt(),
@@ -70,7 +74,7 @@ internal fun parseSetup(raw: Map<String, Any?>): Setup {
     return Setup(
         id = raw["id"].asStringOrNull() ?: "",
         name = raw["name"].asStringOrNull(),
-        devices = devices,
+        devices = devices.distinctBy { it.deviceId },
         raw = raw,
     )
 }

@@ -30,6 +30,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import ua.madeisy.atlantic.core.Heater
+import ua.madeisy.atlantic.core.asList
+import ua.madeisy.atlantic.core.asMap
+import ua.madeisy.atlantic.core.asStringOrNull
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.text.font.FontFamily
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,13 +57,43 @@ fun DevicesScreen(st: UiState, vm: AppViewModel) {
             when {
                 st.loadingDevices && st.setups.isEmpty() ->
                     CircularProgressIndicator(Modifier.align(Alignment.Center))
-                st.allDevices.isEmpty() -> Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("В акаунті немає пристроїв", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Хмара Cozytouch поки не повертає жодного пристрою. Натисніть «Оновити» вгорі за хвилину.",
+                st.allDevices.isEmpty() -> Column(
+                    Modifier.padding(24.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("Хмара не повертає жодного пристрою", style = MaterialTheme.typography.titleMedium)
+                    val gws = st.setups.flatMap { s -> s.raw["gateways"].asList().map { s to it.asMap() } }
+                    if (gws.isEmpty()) Text(
+                        "У вашому акаунті немає жодного Wi‑Fi модуля (шлюзу). Будинків: ${st.setups.size}.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    ) else {
+                        Text("Wi‑Fi модулі в акаунті:", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        gws.forEach { (s, g) ->
+                            val alive = g["isAlive"] == true
+                            Card(Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(12.dp)) {
+                                    Text("${g["serialNumber"].asStringOrNull() ?: "?"}  (id ${g["id"].asStringOrNull()})", fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        (if (alive) "● на зв'язку" else "○ не на зв'язку з хмарою") + " · будинок ${s.name ?: s.id}",
+                                        color = if (alive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                    )
+                                }
+                            }
+                        }
+                        Button(onClick = { vm.discoverOnGateways() }, enabled = !st.diagBusy, modifier = Modifier.fillMaxWidth()) {
+                            Text("Знайти пристрої на модулях")
+                        }
+                    }
+                    OutlinedButton(onClick = { vm.showRawCloud() }, enabled = !st.diagBusy, modifier = Modifier.fillMaxWidth()) {
+                        Text("Показати відповідь хмари")
+                    }
+                    if (st.diagBusy) CircularProgressIndicator()
                     st.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    st.diag?.let {
+                        SelectionContainer {
+                            Text(it, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                        }
+                    }
                 }
                 else -> LazyColumn(
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),

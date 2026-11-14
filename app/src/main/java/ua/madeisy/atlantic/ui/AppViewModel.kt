@@ -21,6 +21,9 @@ import ua.madeisy.atlantic.core.CozyException
 import ua.madeisy.atlantic.core.Device
 import ua.madeisy.atlantic.core.Heater
 import ua.madeisy.atlantic.core.Setup
+import ua.madeisy.atlantic.core.asList
+import ua.madeisy.atlantic.core.asMap
+import ua.madeisy.atlantic.core.asLongOrNull
 import ua.madeisy.atlantic.core.Slot
 import ua.madeisy.atlantic.data.CredentialStore
 
@@ -39,6 +42,8 @@ data class UiState(
     val consumptions: List<ConsumptionDay>? = null,
     val message: String? = null,
     val error: String? = null,
+    val diag: String? = null,
+    val diagBusy: Boolean = false,
 ) {
     val allDevices: List<Pair<Setup, Device>> get() = setups.flatMap { s -> s.devices.map { s to it } }
     val selected: Pair<Setup, Device>? get() = allDevices.firstOrNull { it.second.deviceId == selectedDeviceId }
@@ -232,6 +237,34 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         command(ids.ifEmpty { setOf(-1) }, opt, if (days == null) "Відсутність вимкнено" else "Відсутність на $days дн.") { heater, setup ->
             heater.setAway(api, setup, start, end, now)
+        }
+    }
+
+    // ───── Діагностика, коли пристроїв не видно ─────
+
+    fun showRawCloud() {
+        _state.update { it.copy(diagBusy = true) }
+        viewModelScope.launch {
+            val text = withContext(Dispatchers.IO) {
+                listOf("/magellan/cozytouch/setupviewv2", "/magellan/setups", "/magellan/gam/devices")
+                    .joinToString("\n\n") { api.rawGet(it) }
+            }
+            _state.update { it.copy(diag = text, diagBusy = false) }
+        }
+    }
+
+    /** Попросити хмару знайти пристрої на кожному шлюзі акаунта, потім перечитати список. */
+    fun discoverOnGateways() {
+        val ids = _state.value.setups.flatMap { s -> s.raw["gateways"].asList().mapNotNull { it.asMap()["id"].asLongOrNull()?.toInt() } }
+        if (ids.isEmpty()) { _state.update { it.copy(diag = "В акаунті немає жодного шлюзу (Wi‑Fi модуля).") }; return }
+        _state.update { it.copy(diagBusy = true, diag = "Пошук пристроїв на шлюзах $ids…") }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                ids.forEach { api.requestDiscover(it); api.autoConfigureZones(it) }
+            }
+            delay(20_000)
+            _state.update { it.copy(diagBusy = false, diag = null) }
+            loadDevices()
         }
     }
 

@@ -251,6 +251,12 @@ class CozyApi(
         runCatching { authed("POST", "/magellan/devices/discover?gatewayId=$gatewayId", "\"\"") }
     }
 
+    /** Для діагностики: «HTTP код» + тіло відповіді. */
+    fun rawGet(path: String): String {
+        val r = runCatching { authed("GET", path) }.getOrElse { return "$path → ${it.message}" }
+        return "GET $path → HTTP ${r.code}\n${r.body.take(6000)}"
+    }
+
     fun autoConfigureZones(gatewayId: Int) {
         runCatching { authed("POST", "/magellan/zones/autoconfigure", Json.stringify(mapOf("gatewayId" to gatewayId))) }
     }
