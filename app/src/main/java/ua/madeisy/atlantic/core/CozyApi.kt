@@ -236,6 +236,17 @@ class CozyApi(
         }
     }
 
+    /** Від'єднати шлюз від будинку і видалити його з акаунта (як у Cozytouch). */
+    fun removeGateway(setupId: Int, gatewayId: Int) {
+        val body = Json.stringify(mapOf("gatewayId" to gatewayId))
+        val d = http("POST", "/magellan/cozytouch/setups/$setupId/detachgateway", body, headers() + ("bypassgam" to "false"))
+        log("detachgateway -> ${d.code} ${d.body.take(200)}")
+        val del = authed("DELETE", "/magellan/gateways/$gatewayId")
+        log("delete gateway -> ${del.code} ${del.body.take(200)}")
+        if (d.code !in 200..299 && del.code !in 200..299)
+            throw CozyException("Не вдалося видалити модуль: HTTP ${d.code}/${del.code} ${del.body.take(150)}", del.code)
+    }
+
     /** Стан виявлення шлюзу: 0 невідомо, 1 ідентифіковано, 2 виявлено, 3 синхронізовано, 4 помилка. */
     fun gatewayDiscoverStatus(gatewayId: Int): Int? {
         for (path in listOf("/magellan/v2/gateways/$gatewayId/discover-status", "/magellan/gateways/$gatewayId/discover-status")) {

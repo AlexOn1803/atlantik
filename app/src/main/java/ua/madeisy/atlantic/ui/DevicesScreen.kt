@@ -37,6 +37,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.font.FontFamily
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -77,6 +83,18 @@ fun DevicesScreen(st: UiState, vm: AppViewModel) {
                                         (if (alive) "● на зв'язку" else "○ не на зв'язку з хмарою") + " · будинок ${s.name ?: s.id}",
                                         color = if (alive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                                     )
+                                    val gid = g["id"].asStringOrNull()?.toIntOrNull()
+                                    if (!alive && gid != null) {
+                                        var ask by remember { mutableStateOf(false) }
+                                        TextButton(onClick = { ask = true }, enabled = !st.diagBusy) { Text("Видалити з акаунта") }
+                                        if (ask) AlertDialog(
+                                            onDismissRequest = { ask = false },
+                                            title = { Text("Видалити модуль?") },
+                                            text = { Text("Модуль ${g["serialNumber"].asStringOrNull()} буде від'єднано від будинку і видалено з вашого акаунта.") },
+                                            confirmButton = { TextButton(onClick = { ask = false; vm.removeGateway(s.id, gid) }) { Text("Видалити") } },
+                                            dismissButton = { TextButton(onClick = { ask = false }) { Text("Скасувати") } },
+                                        )
+                                    }
                                 }
                             }
                         }

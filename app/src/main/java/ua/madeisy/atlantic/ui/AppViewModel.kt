@@ -253,6 +253,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun removeGateway(setupId: String, gatewayId: Int) {
+        _state.update { it.copy(diagBusy = true) }
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { api.removeGateway(setupId.toInt(), gatewayId) }
+                _state.update { it.copy(diagBusy = false, diag = "Модуль видалено з акаунта.") }
+            } catch (e: Exception) {
+                _state.update { it.copy(diagBusy = false, error = e.message) }
+            }
+            loadDevices()
+        }
+    }
+
     /** Попросити хмару знайти пристрої на кожному шлюзі акаунта, потім перечитати список. */
     fun discoverOnGateways() {
         val ids = _state.value.setups.flatMap { s -> s.raw["gateways"].asList().mapNotNull { it.asMap()["id"].asLongOrNull()?.toInt() } }
