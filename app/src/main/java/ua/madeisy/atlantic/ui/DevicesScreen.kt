@@ -44,13 +44,6 @@ fun DevicesScreen(st: UiState, vm: AppViewModel) {
                 },
             )
         },
-        floatingActionButton = {
-            if (st.allDevices.isNotEmpty()) ExtendedFloatingActionButton(
-                onClick = { vm.openAddHeater() },
-                icon = { Icon(Icons.Default.Add, null) },
-                text = { Text("Додати обігрівач") },
-            )
-        },
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
             when {
@@ -59,14 +52,9 @@ fun DevicesScreen(st: UiState, vm: AppViewModel) {
                 st.allDevices.isEmpty() -> Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("В акаунті немає пристроїв", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Додайте свій Wi‑Fi обігрівач Atlantic прямо звідси — знадобиться PIN-id з наклейки " +
-                            "і пароль від домашнього Wi‑Fi 2.4 ГГц.",
+                        "Хмара Cozytouch поки не повертає жодного пристрою. Натисніть «Оновити» вгорі за хвилину.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Button(onClick = { vm.openAddHeater() }) {
-                        Icon(Icons.Default.Add, null)
-                        Text("  Додати обігрівач")
-                    }
                     st.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 }
                 else -> LazyColumn(
@@ -88,11 +76,6 @@ fun DevicesScreen(st: UiState, vm: AppViewModel) {
                                         h.target?.let { "ціль ${ua.madeisy.atlantic.core.Catalog.fmt(it)} °C" },
                                         if (h.hasPower && !h.isOn) "вимкнено" else null,
                                     ).joinToString(" · "),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                if (!d.looksLikeHeater) Text(
-                                    "model ${d.modelId} · product ${d.productId}",
-                                    style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }

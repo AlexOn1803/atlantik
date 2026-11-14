@@ -15,7 +15,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import ua.madeisy.atlantic.ui.AddHeaterScreen
 import ua.madeisy.atlantic.ui.AppViewModel
 import ua.madeisy.atlantic.ui.AtlanticTheme
 import ua.madeisy.atlantic.ui.DevicesScreen
@@ -42,7 +41,6 @@ private fun Root(vm: AppViewModel) {
     when {
         st.checkingSaved -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         !st.loggedIn -> LoginScreen(st, vm)
-        st.addingHeater -> AddHeaterScreen(st, vm)
         st.selected != null -> {
             BackHandler(enabled = st.allDevices.size > 1) { vm.closeDevice() }
             HeaterScreen(st, vm)

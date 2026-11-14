@@ -95,7 +95,6 @@ fun HeaterScreen(st: UiState, vm: AppViewModel) {
                     }
                 },
                 actions = {
-                    IconButton(onClick = { vm.openAddHeater() }) { Icon(Icons.Default.Add, "Додати обігрівач") }
                     if (st.refreshing) CircularProgressIndicator(Modifier.size(22.dp).padding(end = 4.dp), strokeWidth = 2.dp)
                     else IconButton(onClick = { vm.refreshSelected() }) { Icon(Icons.Default.Refresh, "Оновити") }
                 },
@@ -171,10 +170,6 @@ private fun ControlTab(st: UiState, h: Heater, vm: AppViewModel) {
             Text("Знайти прилад (блимнути індикатором)")
         }
 
-        if (!h.device.looksLikeHeater) InfoCard(
-            "Цей пристрій не схожий на обігрівач (model ${h.device.modelId}, product ${h.device.productId}). " +
-                "Показано лише ті налаштування, які він повідомляє.",
-        )
     }
 }
 
